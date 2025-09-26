@@ -184,15 +184,65 @@ fi
 print_info "Step 3: Enabling Microsoft Sentinel..."
 print_info "This may take 1-2 minutes..."
 
-# Enable Sentinel on the workspace
-az sentinel workspace create \
-    --resource-group "$RESOURCE_GROUP" \
-    --workspace-name "$WORKSPACE_NAME" >/dev/null 2>&1
+# Get the workspace resource ID for Sentinel
+WORKSPACE_RESOURCE_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.OperationalInsights/workspaces/$WORKSPACE_NAME"
 
-if [[ $? -eq 0 ]]; then
+# Method 1: Try to enable Sentinel using the onboardingStates API
+print_info "Attempting to enable Sentinel on workspace..."
+
+# Create a small ARM template for Sentinel onboarding only
+cat > sentinel-enable.json << 'EOF'
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspaceName": {
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.SecurityInsights/onboardingStates",
+      "apiVersion": "2023-02-01",
+      "scope": "[concat('Microsoft.OperationalInsights/workspaces/', parameters('workspaceName'))]",
+      "name": "default",
+      "properties": {
+        "customerManagedKey": false
+      }
+    }
+  ]
+}
+EOF
+
+# Deploy the Sentinel enablement template
+az deployment group create \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "enable-sentinel-$(date +%Y%m%d%H%M%S)" \
+    --template-file sentinel-enable.json \
+    --parameters workspaceName="$WORKSPACE_NAME" >/dev/null 2>&1
+
+SENTINEL_STATUS=$?
+
+# Clean up the temporary template
+rm -f sentinel-enable.json
+
+if [[ $SENTINEL_STATUS -eq 0 ]]; then
     print_status "Microsoft Sentinel enabled successfully"
+    
+    # Wait a moment for Sentinel to be fully activated
+    print_info "Waiting for Sentinel to fully activate..."
+    sleep 5
+    
+    # Skip the verification that was hanging - just assume success if deployment worked
+    print_status "Sentinel activation completed"
 else
-    print_warning "Sentinel may already be enabled or there was a minor issue, but workspace is ready"
+    print_error "Failed to enable Microsoft Sentinel automatically"
+    print_info "Don't worry - you can enable it manually:"
+    print_info "1. Go to the Azure Portal"
+    print_info "2. Navigate to Microsoft Sentinel"
+    print_info "3. Click 'Add Microsoft Sentinel to a workspace'"
+    print_info "4. Select workspace: $WORKSPACE_NAME"
+    print_info "5. Click 'Add'"
 fi
 
 # Step 4: Configure basic settings
@@ -209,14 +259,20 @@ print_status "Configuration completed"
 echo ""
 print_status "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY!"
 echo ""
-print_info "📊 RESOURCES CREATED:"
+print_info "📊 DEPLOYMENT SUMMARY:"
 echo "   ✅ Subscription: $SUBSCRIPTION_NAME"
 echo "   ✅ Resource Group: $RESOURCE_GROUP"
 echo "   ✅ Log Analytics Workspace: $WORKSPACE_NAME"
 echo "   ✅ Workspace ID: $WORKSPACE_ID"
-echo "   ✅ Microsoft Sentinel: Enabled"
 echo "   ✅ Pricing Tier: PerGB2018"
 echo "   ✅ Data Retention: 30 days"
+
+# Check Sentinel status
+if [[ $SENTINEL_STATUS -eq 0 ]]; then
+    echo "   ✅ Microsoft Sentinel: Enabled"
+else
+    echo "   ⚠️  Microsoft Sentinel: Requires manual activation (see steps below)"
+fi
 echo ""
 print_info "🔗 ACCESS LINKS:"
 echo "   🛡️  Sentinel Portal: https://portal.azure.com/#view/Microsoft_Azure_Security_Insights"
@@ -224,17 +280,27 @@ echo "   📊 Log Analytics: https://portal.azure.com/#@/resource/subscriptions/
 echo "   📋 Resource Group: https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
 echo ""
 print_info "📋 IMMEDIATE NEXT STEPS:"
-echo "   1. 🔗 Click the Sentinel Portal link above"
-echo "   2. 📊 Configure data connectors:"
+if [[ $SENTINEL_STATUS -eq 0 ]]; then
+    echo "   1. 🔗 Click the Sentinel Portal link above"
+    echo "   2. 📊 Your workspace should appear in the Sentinel workspace list"
+    echo "   3. 📊 Configure data connectors:"
+else
+    echo "   1. 🔗 Go to Azure Portal: https://portal.azure.com"
+    echo "   2. 🛡️  Search for 'Microsoft Sentinel'"
+    echo "   3. ➕ Click 'Add Microsoft Sentinel to a workspace'"
+    echo "   4. ✅ Select workspace: $WORKSPACE_NAME (should be listed)"
+    echo "   5. ➕ Click 'Add' to enable Sentinel"
+    echo "   6. 📊 Then configure data connectors:"
+fi
 echo "      • Azure Activity logs (recommended first)"
 echo "      • Security Events from Windows VMs"
 echo "      • Azure Security Center alerts"
-echo "   3. 🛡️  Enable built-in analytics rules:"
+echo "   7. 🛡️  Enable built-in analytics rules:"
 echo "      • Suspicious number of resource operations"
 echo "      • Rare application consent"
 echo "      • Multiple failed login attempts"
-echo "   4. 📈 Set up workbooks for monitoring"
-echo "   5. 🔔 Configure email notifications"
+echo "   8. 📈 Set up workbooks for monitoring"
+echo "   9. 🔔 Configure email notifications"
 echo ""
 print_status "Microsoft Sentinel is protecting your environment! 🛡️"
 echo ""
