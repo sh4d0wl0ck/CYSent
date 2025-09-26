@@ -15,8 +15,8 @@ This repository provides a comprehensive solution to deploy Microsoft Sentinel u
 
 ```powershell
 # Clone repository
-git clone [YOUR_REPO_URL]
-cd [YOUR_REPO_NAME]
+git clone https://github.com/sh4d0wl0ck/CYSent.git
+cd CYSent
 
 # Edit parameters in main.bicepparam file
 # Then deploy:
