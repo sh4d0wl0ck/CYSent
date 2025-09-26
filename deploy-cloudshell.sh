@@ -99,7 +99,7 @@ print_info "Starting deployment process..."
 
 # Download the Bicep template directly from GitHub
 print_info "Downloading Bicep templates..."
-REPO_URL="https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME/main"
+REPO_URL="https://raw.githubusercontent.com/sh4d0wl0ck/CYSent/main"
 
 # Create temporary directory
 TEMP_DIR=$(mktemp -d)
