@@ -148,109 +148,156 @@ done
 
 print_status "Resource provider registration completed"
 
-# Create Bicep template inline (since we can't download from the repo reliably)
+# Create ARM template inline for maximum compatibility
 print_info "Creating deployment template..."
 
-cat > main.bicep << 'EOF'
-// Simple Sentinel deployment for Cloud Shell
-targetScope = 'subscription'
-
-@description('Resource group name')
-param resourceGroupName string
-
-@description('Location for resources')
-param location string = 'eastus'
-
-@description('Workspace name')
-param workspaceName string
-
-// Create resource group
-resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
-  name: resourceGroupName
-  location: location
-  tags: {
-    Purpose: 'Microsoft Sentinel'
-    DeployedBy: 'CloudShell'
-    CreatedDate: utcNow('yyyy-MM-dd')
+cat > template.json << 'EOF'
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the resource group"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus",
+      "metadata": {
+        "description": "Location for resources"
+      }
+    },
+    "workspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Log Analytics workspace"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2021-04-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "Purpose": "Microsoft Sentinel",
+        "DeployedBy": "CloudShell"
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2021-04-01",
+      "name": "sentinel-resources",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "workspaceName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2022-10-01",
+              "name": "[parameters('workspaceName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": 30,
+                "features": {
+                  "enableLogAccessUsingOnlyResourcePermissions": true
+                },
+                "workspaceCapping": {
+                  "dailyQuotaGb": -1
+                },
+                "publicNetworkAccessForIngestion": "Enabled",
+                "publicNetworkAccessForQuery": "Enabled"
+              },
+              "tags": {
+                "Purpose": "Microsoft Sentinel"
+              }
+            },
+            {
+              "type": "Microsoft.SecurityInsights/onboardingStates",
+              "apiVersion": "2023-02-01",
+              "scope": "[concat('Microsoft.OperationalInsights/workspaces/', parameters('workspaceName'))]",
+              "name": "default",
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+              ],
+              "properties": {
+                "customerManagedKey": false
+              }
+            }
+          ],
+          "outputs": {
+            "workspaceId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))).customerId]"
+            }
+          }
+        },
+        "parameters": {
+          "workspaceName": {
+            "value": "[parameters('workspaceName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[parameters('resourceGroupName')]"
+    },
+    "workspaceName": {
+      "type": "string",
+      "value": "[parameters('workspaceName')]"
+    },
+    "subscriptionId": {
+      "type": "string",
+      "value": "[subscription().subscriptionId]"
+    },
+    "sentinelUrl": {
+      "type": "string",
+      "value": "[concat('https://portal.azure.com/#view/Microsoft_Azure_Security_Insights/MainMenuBlade/~/0/subscriptionId/', subscription().subscriptionId, '/resourceGroup/', parameters('resourceGroupName'))]"
+    }
   }
 }
-
-// Deploy Log Analytics and Sentinel
-module sentinel 'modules/sentinel.bicep' = {
-  scope: rg
-  name: 'sentinel-deployment'
-  params: {
-    workspaceName: workspaceName
-    location: location
-  }
-}
-
-output resourceGroupName string = resourceGroupName
-output workspaceName string = workspaceName
-output subscriptionId string = subscription().subscriptionId
-output sentinelUrl string = 'https://portal.azure.com/#view/Microsoft_Azure_Security_Insights/MainMenuBlade/~/0/subscriptionId/${subscription().subscriptionId}/resourceGroup/${resourceGroupName}'
 EOF
 
-# Create the modules directory and sentinel module
-mkdir -p modules
+print_status "ARM template created successfully"
 
-cat > modules/sentinel.bicep << 'EOF'
-@description('Workspace name')
-param workspaceName string
-
-@description('Location')
-param location string
-
-// Log Analytics Workspace
-resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
-  name: workspaceName
-  location: location
-  properties: {
-    sku: {
-      name: 'PerGB2018'
-    }
-    retentionInDays: 30
-    features: {
-      enableLogAccessUsingOnlyResourcePermissions: true
-    }
-    workspaceCapping: {
-      dailyQuotaGb: -1
-    }
-    publicNetworkAccessForIngestion: 'Enabled'
-    publicNetworkAccessForQuery: 'Enabled'
-  }
-  tags: {
-    Purpose: 'Microsoft Sentinel'
-  }
-}
-
-// Sentinel
-resource sentinelOnboarding 'Microsoft.SecurityInsights/onboardingStates@2023-02-01' = {
-  scope: logAnalyticsWorkspace
-  name: 'default'
-  properties: {
-    customerManagedKey: false
-  }
-}
-
-output workspaceId string = logAnalyticsWorkspace.properties.customerId
-output workspaceResourceId string = logAnalyticsWorkspace.id
-EOF
-
-print_status "Templates created successfully"
-
-# Deploy using Bicep
+# Deploy using ARM template
 print_info "Deploying Microsoft Sentinel..."
 DEPLOYMENT_NAME="sentinel-cloudshell-$(date +%Y%m%d%H%M%S)"
 
 print_info "Starting deployment: $DEPLOYMENT_NAME"
 print_info "This may take 5-10 minutes..."
 
-# Deploy to subscription scope
+# Deploy to subscription scope using ARM template
 az deployment sub create \
     --location "$LOCATION" \
     --name "$DEPLOYMENT_NAME" \
-    --template-file main.bicep \
+    --template-file template.json \
     --parameters \
         resourceGroupName="$RESOURCE_GROUP" \
         location="$LOCATION" \
@@ -300,8 +347,7 @@ else
 fi
 
 # Cleanup temporary files
-rm -f main.bicep
-rm -rf modules/
+rm -f template.json
 
 print_info "Temporary files cleaned up"
 echo ""
